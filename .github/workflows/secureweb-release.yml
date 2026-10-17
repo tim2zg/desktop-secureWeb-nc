@@ -179,11 +179,22 @@ jobs:
               $source = $source -replace '(?m)^import info', "import os`nimport info"
               Set-Content $blueprint $source -NoNewline
           }
+          # Retain the bundled transport alongside Nextcloud in the installer.
+          $blacklist = Split-Path $blueprint -Parent | Join-Path -ChildPath 'blacklist.txt'
+          $rules = Get-Content $blacklist -Raw
+          $originalRule = 'bin/(?!(nextcloud|nextcloudcmd|QtWebEngineProcess)).*\.exe'
+          $secureWebRule = 'bin/(?!(nextcloud|nextcloudcmd|QtWebEngineProcess|secureweb-desktop-transport)).*\.exe'
+          if (!$rules.Contains($originalRule) -and !$rules.Contains($secureWebRule)) { throw 'Unexpected executable packaging exclusions' }
+          Set-Content $blacklist ($rules.Replace($originalRule, $secureWebRule)) -NoNewline
           python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c --package nextcloud-client
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force release | Out-Null
           $packages = @(Get-ChildItem "${{ env.CRAFT_TARGET }}/tmp" -Recurse -File | Where-Object { $_.Name -match '^nextcloud.*\.(exe|msi|7z)$' })
           if (!$packages) { throw 'Craft produced no desktop package' }
+          foreach ($package in $packages) {
+              $contents = & 7z l $package.FullName
+              if ($LASTEXITCODE -ne 0 -or !($contents -match 'secureweb-desktop-transport\.exe')) { throw "Transport is missing from $($package.Name)" }
+          }
           $packages | Copy-Item -Destination release
           Copy-Item SECUREWEB.md release/
           Copy-Item .secureweb-core-revision release/secureweb-core-revision.txt
