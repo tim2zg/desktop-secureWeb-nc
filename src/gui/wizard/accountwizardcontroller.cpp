@@ -20,6 +20,7 @@
 #include "guiutility.h"
 #include "localnetworkpermission.h"
 #include "networkjobs.h"
+#include "securewebreply.h"
 #include "owncloudpropagator_p.h"
 #include "selectivesyncdialog.h"
 #include "theme.h"
@@ -96,6 +97,7 @@ bool localFolderContainsData(const QString &localSyncFolder)
 
 AccountWizardController::AccountWizardController(QObject *parent)
     : QObject(parent)
+    , _secureWebEnabled([] { return !SecureWebReply::profilePath().isEmpty(); })
     , _localNetworkPermissionCheck(LocalNetworkPermission::checkDeniedForConnection)
     , _localSyncFolderPicker([this](const QString &caption, const QString &startFolder, std::function<void(const QString &, const QByteArray &)> completion) {
         pickLocalSyncFolder(caption, startFolder, std::move(completion));
@@ -949,6 +951,13 @@ void AccountWizardController::slotNoServerFoundTimeout(const QUrl &url)
 
 void AccountWizardController::slotDetermineAuthType()
 {
+    if (_secureWebEnabled()) {
+        setBusy(false);
+        setAuthStatusText({});
+        setErrorText({});
+        setCurrentStep(BasicAuthStep);
+        return;
+    }
     auto *job = new DetermineAuthTypeJob(_account, this);
     connect(job, &DetermineAuthTypeJob::authType, this, [this](DetermineAuthTypeJob::AuthType type) {
         switch (type) {

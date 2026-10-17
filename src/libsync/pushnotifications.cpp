@@ -6,6 +6,7 @@
 #include "pushnotifications.h"
 #include "creds/abstractcredentials.h"
 #include "account.h"
+#include "securewebreply.h"
 
 #include <QJsonArray>
 
@@ -166,6 +167,9 @@ void PushNotifications::onWebSocketSslErrors(const QList<QSslError> &errors)
 
 void PushNotifications::openWebSocket()
 {
+    if (!SecureWebReply::profilePath().isEmpty()) {
+        return;
+    }
     // Open websocket
     const auto capabilities = _account->capabilities();
     const auto webSocketUrl = capabilities.pushNotificationsWebSocketUrl();

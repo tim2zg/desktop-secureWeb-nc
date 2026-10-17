@@ -1,0 +1,226 @@
+# SPDX-FileCopyrightText: 2022 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: SecureWeb Windows Desktop Release
+on:
+  push:
+    branches: [codex/secureweb-desktop]
+    tags: ['secureweb-v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qt-transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev
+      - run: cmake -S secureweb-tests -B build/secureweb-tests -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build/secureweb-tests --parallel 2
+      - run: ctest --test-dir build/secureweb-tests --output-on-failure
+  build:
+    name: Windows Build and Test
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      CRAFT_TARGET: windows-msvc2022_64-cl
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}\CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}\craftmaster.ini
+      PYTHON_VERSION: '3.12'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Resolve Craft dependency revisions
+        id: craft-revisions
+        shell: pwsh
+        run: |
+          function configValue($key) {
+              $escapedKey = [regex]::Escape($key)
+              $matches = @(Select-String -Path "${{ env.CRAFT_MASTER_CONFIG }}" -Pattern "^\s*$escapedKey\s*=\s*(.+?)\s*$")
+              if($matches.Count -ne 1) {
+                  throw "Expected exactly one $key value in craftmaster.ini."
+              }
+              return $matches[0].Matches[0].Groups[1].Value.Trim()
+          }
+
+          $craftRevision = configValue "CraftRevision"
+          $kdeBlueprintRef = configValue "craft/craft-blueprints-kde.revision"
+          $nextcloudBlueprintRef = configValue "craft/craft-blueprints-nextcloud.revision"
+
+          function remoteRevision($repository, $ref) {
+              $revision = git ls-remote $repository $ref
+              if($LASTEXITCODE -ne 0 -or !$revision) {
+                  throw "Could not resolve $ref from $repository."
+              }
+              return ($revision -split '\s+')[0]
+          }
+
+          $kdeBlueprintRevision = remoteRevision "https://github.com/nextcloud/craft-blueprints-kde.git" "refs/heads/$kdeBlueprintRef"
+          $nextcloudBlueprintRevision = remoteRevision "https://github.com/nextcloud/craft-blueprints-nextcloud.git" "refs/heads/$nextcloudBlueprintRef"
+          @(
+              "kde_ref=$kdeBlueprintRef"
+              "nextcloud_ref=$nextcloudBlueprintRef"
+              "key=$craftRevision-$kdeBlueprintRevision-$nextcloudBlueprintRevision"
+          ) | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore Craft dependencies
+        id: craft-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CRAFT_MASTER_LOCATION }}
+            ${{ env.CRAFT_MASTER_CONFIG }}
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ runner.os }}-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}
+
+      - name: Install Craft Master with Nextcloud Client Deps
+        if: steps.craft-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          & cmd /C "git clone -q --depth=1 https://github.com/KDE/craftmaster.git ${{ env.CRAFT_MASTER_LOCATION }} 2>&1"
+
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          }
+
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|${{ steps.craft-revisions.outputs.kde_ref }}|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|${{ steps.craft-revisions.outputs.nextcloud_ref }}|"
+          craft craft
+          craft --install-deps nextcloud-client
+
+      - name: Save Craft dependencies
+        if: steps.craft-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CRAFT_MASTER_LOCATION }}
+            ${{ env.CRAFT_MASTER_CONFIG }}
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ runner.os }}-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}
+
+      #- name: Cache Install inkscape
+      #  id: cache-install-inkscape
+      #  uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      #  with:
+      #    path: C:\Program Files\inkscape
+      #    key: ${{ runner.os }}-cache-install-inkscape
+
+      - name: Install inkscape
+      #  if: steps.cache-install-inkscape.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          choco install inkscape -y --no-progress
+
+      - name: Setup PATH
+        shell: pwsh
+        run: |
+          echo "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Fetch verified desktop transport from this release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          New-Item -ItemType Directory -Force secureweb-bin | Out-Null
+          $downloaded = $false
+          for ($attempt = 0; $attempt -lt 80; $attempt++) {
+              gh release download secureweb-desktop-v0.1.0 --pattern secureweb-desktop-transport.exe --pattern transport.sha256 --pattern secureweb-core-revision.txt --dir secureweb-bin --clobber
+              if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
+              Start-Sleep -Seconds 15
+          }
+          if (!$downloaded) { throw 'The pinned transport build is not available yet' }
+          $expectedRevision = (Get-Content .secureweb-core-revision).Trim()
+          $actualRevision = (Get-Content secureweb-bin/secureweb-core-revision.txt).Trim()
+          if (!$actualRevision.StartsWith($expectedRevision)) { throw 'Transport source revision mismatch' }
+          $expectedHash = (Get-Content secureweb-bin/transport.sha256).Trim().ToLower()
+          if (Test-Path .secureweb-transport.sha256) { $expectedHash = (Get-Content .secureweb-transport.sha256).Trim().ToLower() }
+          $actualHash = (Get-FileHash secureweb-bin/secureweb-desktop-transport.exe -Algorithm SHA256).Hash.ToLower()
+          if ($actualHash -ne $expectedHash) { throw 'Transport checksum mismatch' }
+      - name: Compile
+        shell: pwsh
+        run: |
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          }
+
+          craft --src-dir ${{ github.workspace }} nextcloud-client
+
+      - name: Run SecureWeb Qt integration tests
+        shell: pwsh
+        run: |
+          $buildFolder = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build"
+          if (!(Test-Path "$buildFolder/bin/SecureWebReplyTest.exe") -or !(Test-Path "$buildFolder/bin/AccountWizardControllerTest.exe")) { throw 'SecureWeb test targets are missing' }
+          ctest --test-dir "$buildFolder" -R "SecureWebReply|AccountWizardController" --no-tests=error --output-on-failure --timeout 120
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package desktop application
+        shell: pwsh
+        run: |
+          # The stable-35.0 upstream blueprint uses os.path without importing os.
+          # Repair only this missing import in the runner's downloaded blueprint.
+          $blueprint = "${{ env.CRAFT_TARGET }}/etc/blueprints/locations/craft-blueprints-nextcloud/nextcloud-client/nextcloud-client.py"
+          $source = Get-Content $blueprint -Raw
+          if ($source -notmatch '(?m)^import os\s*$') {
+              if ($source -notmatch '(?m)^import info\s*$') { throw 'Unexpected Nextcloud blueprint; review packaging compatibility' }
+              $source = $source -replace '(?m)^import info', "import os`nimport info"
+              Set-Content $blueprint $source -NoNewline
+          }
+          # Retain the bundled transport alongside Nextcloud in the installer.
+          $blacklist = Split-Path $blueprint -Parent | Join-Path -ChildPath 'blacklist.txt'
+          $rules = Get-Content $blacklist -Raw
+          $originalRule = 'bin/(?!(nextcloud|nextcloudcmd|QtWebEngineProcess)).*\.exe'
+          $secureWebRule = 'bin/(?!(nextcloud|nextcloudcmd|QtWebEngineProcess|secureweb-desktop-transport)).*\.exe'
+          if (!$rules.Contains($originalRule) -and !$rules.Contains($secureWebRule)) { throw 'Unexpected executable packaging exclusions' }
+          Set-Content $blacklist ($rules.Replace($originalRule, $secureWebRule)) -NoNewline
+          python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c --package nextcloud-client
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force release | Out-Null
+          $packages = @(Get-ChildItem "${{ env.CRAFT_TARGET }}/tmp" -Recurse -File | Where-Object { $_.Name -match '^nextcloud.*\.(exe|msi|7z)$' })
+          if (!$packages) { throw 'Craft produced no desktop package' }
+          $packages | Copy-Item -Destination release
+          foreach ($package in $packages) {
+              $unpacked = Join-Path "${{ github.workspace }}/package-check" $package.Name
+              & 7z x $package.FullName "-o$unpacked" -y | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Cannot extract $($package.Name)" }
+              $helpers = @(Get-ChildItem $unpacked -Recurse -Filter secureweb-desktop-transport.exe)
+              if (!$helpers) {
+                  # Craft's NSIS executable embeds the application as a 7z payload.
+                  foreach ($payload in @(Get-ChildItem $unpacked -Recurse -File -Filter '*.7z')) {
+                      & 7z x $payload.FullName "-o$($payload.FullName)-contents" -y | Out-Null
+                      if ($LASTEXITCODE -ne 0) { throw 'Cannot extract installer payload' }
+                  }
+                  $helpers = @(Get-ChildItem $unpacked -Recurse -Filter secureweb-desktop-transport.exe)
+              }
+              if (!$helpers) { throw "Transport is missing from $($package.Name)" }
+              foreach ($helper in $helpers) {
+                  if ((Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLower() -ne (Get-Content secureweb-bin/transport.sha256).Trim().ToLower()) { throw 'Packaged transport checksum mismatch' }
+              }
+          }
+          Copy-Item SECUREWEB.md release/
+          Copy-Item .secureweb-core-revision release/secureweb-core-revision.txt
+          Get-ChildItem release -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content release/SHA256SUMS.txt
+      - name: Upload desktop package to draft release
+        if: always() && !cancelled()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if (!(Test-Path release)) { Write-Output 'No staged package to retain'; exit 0 }
+          $releaseFiles = @(Get-ChildItem release -File | Select-Object -ExpandProperty FullName)
+          gh release upload secureweb-desktop-v0.1.0 @releaseFiles --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

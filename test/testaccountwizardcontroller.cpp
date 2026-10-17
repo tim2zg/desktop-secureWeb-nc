@@ -30,6 +30,11 @@ namespace OCC {
 class AccountWizardControllerTestAccess
 {
 public:
+    static void determineSecureWebAuth(AccountWizardController &controller)
+    {
+        controller._secureWebEnabled = [] { return true; };
+        controller.slotDetermineAuthType();
+    }
     static void setLocalNetworkPermissionDenied(AccountWizardController &controller, bool denied)
     {
         controller._localNetworkPermissionCheck = [denied](const QUrl &, QObject *, std::function<void(bool)> callback) {
@@ -91,6 +96,18 @@ class TestAccountWizardController : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void secureWebUsesAppPasswordEntryInsteadOfAnExternalBrowser()
+    {
+        AccountWizardController controller;
+        AccountWizardControllerTestAccess::determineSecureWebAuth(controller);
+        QCOMPARE(controller.currentStep(), AccountWizardController::BasicAuthStep);
+        QVERIFY(!controller.busy());
+        QVERIFY(!controller.authPolling());
+        QVERIFY(!controller.basicAuthValid());
+        controller.setBasicAuthUser(QStringLiteral("alice"));
+        controller.setBasicAuthPassword(QStringLiteral("app-password"));
+        QVERIFY(controller.basicAuthValid());
+    }
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
