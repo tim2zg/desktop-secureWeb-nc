@@ -64,6 +64,8 @@ set(libsync_SRCS
     logger.cpp
     accessmanager.h
     accessmanager.cpp
+    securewebreply.h
+    securewebreply.cpp
     configfile.h
     configfile.cpp
     abstractnetworkjob.h

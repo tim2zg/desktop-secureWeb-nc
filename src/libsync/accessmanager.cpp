@@ -19,6 +19,7 @@
 #include "accessmanager.h"
 #include "common/utility.h"
 #include "httplogger.h"
+#include "securewebreply.h"
 
 using namespace Qt::StringLiterals;
 
@@ -117,6 +118,26 @@ QNetworkReply *AccessManager::createRequest(QNetworkAccessManager::Operation op,
         newRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     }
 
+    if (const auto profile = SecureWebReply::profilePath(); !profile.isEmpty()) {
+        const auto cookies = cookieJar()->cookiesForUrl(newRequest.url());
+        if (!cookies.isEmpty() && !newRequest.hasRawHeader("Cookie")) {
+            QByteArray header;
+            for (const auto &cookie : cookies) {
+                if (!header.isEmpty()) { header += "; "; }
+                header += cookie.toRawForm(QNetworkCookie::NameAndValueOnly);
+            }
+            newRequest.setRawHeader("Cookie", header);
+        }
+        const auto reply = new SecureWebReply(op, newRequest, outgoingData, profile, this);
+        connect(reply, &QNetworkReply::metaDataChanged, this, [this, reply] {
+            for (const auto &pair : reply->rawHeaderPairs()) {
+                if (pair.first.compare("set-cookie", Qt::CaseInsensitive) == 0) {
+                    cookieJar()->setCookiesFromUrl(QNetworkCookie::parseCookies(pair.second), reply->url());
+                }
+            }
+        });
+        return reply;
+    }
     const auto reply = QNetworkAccessManager::createRequest(op, newRequest, outgoingData);
     HttpLogger::logRequest(reply, op, outgoingData);
     QObject::connect(reply, &QNetworkReply::requestSent, reply, [reply] {

@@ -202,3 +202,6 @@ theme.qrc
 # Nix
 result
 flake.lock
+# SecureWeb release build input
+/secureweb-bin/
+/secureweb-core/

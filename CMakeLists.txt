@@ -4,6 +4,9 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(client)
+if(EXISTS "${CMAKE_SOURCE_DIR}/secureweb-bin/secureweb-desktop-transport.exe" OR EXISTS "${CMAKE_SOURCE_DIR}/secureweb-bin/secureweb-desktop-transport")
+    set(BUILD_UPDATER OFF CACHE BOOL "SecureWeb builds use explicit fork releases" FORCE)
+endif()
 
 if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum OSX deployment version")
@@ -132,6 +135,11 @@ endif()
 
 include(GNUInstallDirs)
 include(DefineInstallationPaths)
+if(EXISTS "${CMAKE_SOURCE_DIR}/secureweb-bin/secureweb-desktop-transport.exe")
+    install(PROGRAMS "${CMAKE_SOURCE_DIR}/secureweb-bin/secureweb-desktop-transport.exe" DESTINATION "${BIN_INSTALL_DIR}")
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/secureweb-bin/secureweb-desktop-transport")
+    install(PROGRAMS "${CMAKE_SOURCE_DIR}/secureweb-bin/secureweb-desktop-transport" DESTINATION "${BIN_INSTALL_DIR}")
+endif()
 include(GenerateExportHeader)
 
 include(GetGitRevisionDescription)

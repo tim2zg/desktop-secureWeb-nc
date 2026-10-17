@@ -14,6 +14,8 @@ The Nextcloud Desktop Client is an app to synchronize files from Nextcloud Serve
 </p>
 
 ## Downloads 🚀
+SecureWeb-enabled Windows desktop prereleases are published in [this fork's releases](https://github.com/tim2zg/desktop-secureWeb-nc/releases). Read [SecureWeb setup and current limits](SECUREWEB.md) before connecting.
+
 For the latest stable and recommended version, please refer to [the official download page](https://nextcloud.com/install/#install-clients).
 
 ## Help 🛟
