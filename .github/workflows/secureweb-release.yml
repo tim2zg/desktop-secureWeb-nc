@@ -36,29 +36,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Resolve pinned SecureWeb source
-        id: core
-        shell: pwsh
-        run: echo "revision=$((Get-Content .secureweb-core-revision).Trim())" >> $env:GITHUB_OUTPUT
-      - uses: actions/checkout@v4
-        with:
-          repository: 00ong/secureWeb
-          ref: ${{ steps.core.outputs.revision }}
-          path: secureweb-core
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: secureweb-core
-      - name: Test and build bundled envelope transport
-        shell: pwsh
-        run: |
-          cargo test --manifest-path secureweb-core/Cargo.toml -p secureweb-desktop-transport --tests --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --manifest-path secureweb-core/Cargo.toml -p secureweb-desktop-transport --release --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Force secureweb-bin | Out-Null
-          Copy-Item secureweb-core/target/release/secureweb-desktop-transport.exe secureweb-bin/
-
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -152,6 +129,27 @@ jobs:
         run: |
           echo "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Fetch verified desktop transport from this release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          New-Item -ItemType Directory -Force secureweb-bin | Out-Null
+          $downloaded = $false
+          for ($attempt = 0; $attempt -lt 80; $attempt++) {
+              gh release download secureweb-desktop-v0.1.0 --pattern secureweb-desktop-transport.exe --pattern transport.sha256 --pattern secureweb-core-revision.txt --dir secureweb-bin --clobber
+              if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
+              Start-Sleep -Seconds 15
+          }
+          if (!$downloaded) { throw 'The pinned transport build is not available yet' }
+          $expectedRevision = (Get-Content .secureweb-core-revision).Trim()
+          $actualRevision = (Get-Content secureweb-bin/secureweb-core-revision.txt).Trim()
+          if (!$actualRevision.StartsWith($expectedRevision)) { throw 'Transport source revision mismatch' }
+          $expectedHash = (Get-Content secureweb-bin/transport.sha256).Trim().ToLower()
+          if (Test-Path .secureweb-transport.sha256) { $expectedHash = (Get-Content .secureweb-transport.sha256).Trim().ToLower() }
+          $actualHash = (Get-FileHash secureweb-bin/secureweb-desktop-transport.exe -Algorithm SHA256).Hash.ToLower()
+          if ($actualHash -ne $expectedHash) { throw 'Transport checksum mismatch' }
       - name: Compile
         shell: pwsh
         run: |
