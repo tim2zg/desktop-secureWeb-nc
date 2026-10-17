@@ -191,19 +191,36 @@ jobs:
           New-Item -ItemType Directory -Force release | Out-Null
           $packages = @(Get-ChildItem "${{ env.CRAFT_TARGET }}/tmp" -Recurse -File | Where-Object { $_.Name -match '^nextcloud.*\.(exe|msi|7z)$' })
           if (!$packages) { throw 'Craft produced no desktop package' }
-          foreach ($package in $packages) {
-              $contents = & 7z l $package.FullName
-              if ($LASTEXITCODE -ne 0 -or !($contents -match 'secureweb-desktop-transport\.exe')) { throw "Transport is missing from $($package.Name)" }
-          }
           $packages | Copy-Item -Destination release
+          foreach ($package in $packages) {
+              $unpacked = Join-Path "${{ github.workspace }}/package-check" $package.Name
+              & 7z x $package.FullName "-o$unpacked" -y | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Cannot extract $($package.Name)" }
+              $helpers = @(Get-ChildItem $unpacked -Recurse -Filter secureweb-desktop-transport.exe)
+              if (!$helpers) {
+                  # Craft's NSIS executable embeds the application as a 7z payload.
+                  foreach ($payload in @(Get-ChildItem $unpacked -Recurse -File -Filter '*.7z')) {
+                      & 7z x $payload.FullName "-o$($payload.FullName)-contents" -y | Out-Null
+                      if ($LASTEXITCODE -ne 0) { throw 'Cannot extract installer payload' }
+                  }
+                  $helpers = @(Get-ChildItem $unpacked -Recurse -Filter secureweb-desktop-transport.exe)
+              }
+              if (!$helpers) { throw "Transport is missing from $($package.Name)" }
+              foreach ($helper in $helpers) {
+                  if ((Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLower() -ne (Get-Content secureweb-bin/transport.sha256).Trim().ToLower()) { throw 'Packaged transport checksum mismatch' }
+              }
+          }
           Copy-Item SECUREWEB.md release/
           Copy-Item .secureweb-core-revision release/secureweb-core-revision.txt
           Get-ChildItem release -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content release/SHA256SUMS.txt
       - name: Upload desktop package to draft release
+        if: always() && !cancelled()
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          if (!(Test-Path release)) { Write-Output 'No staged package to retain'; exit 0 }
           $releaseFiles = @(Get-ChildItem release -File | Select-Object -ExpandProperty FullName)
           gh release upload secureweb-desktop-v0.1.0 @releaseFiles --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
