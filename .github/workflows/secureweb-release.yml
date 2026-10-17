@@ -122,7 +122,7 @@ jobs:
       #  if: steps.cache-install-inkscape.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          choco install inkscape
+          choco install inkscape -y --no-progress
 
       - name: Setup PATH
         shell: pwsh
@@ -164,7 +164,7 @@ jobs:
         shell: pwsh
         run: |
           $buildFolder = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build"
-          ctest --test-dir "$buildFolder" -R SecureWebReply --output-on-failure --timeout 120
+          ctest --test-dir "$buildFolder" -R "SecureWebReply|AccountWizardController" --output-on-failure --timeout 120
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package desktop application
         shell: pwsh
@@ -172,15 +172,17 @@ jobs:
           python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c --package nextcloud-client
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force release | Out-Null
-          $packages = @(Get-ChildItem "${{ env.CRAFT_TARGET }}/tmp" -Recurse -File | Where-Object { $_.Extension -in '.exe', '.msi', '.7z' })
+          $packages = @(Get-ChildItem "${{ env.CRAFT_TARGET }}/tmp" -Recurse -File | Where-Object { $_.Name -match '^nextcloud.*\.(exe|msi|7z)$' })
           if (!$packages) { throw 'Craft produced no desktop package' }
           $packages | Copy-Item -Destination release
           Copy-Item SECUREWEB.md release/
           Copy-Item .secureweb-core-revision release/secureweb-core-revision.txt
-          Get-ChildItem release -File | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content release/SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nextcloud-secureweb-windows-x64
-          path: release/
-          if-no-files-found: error
-          retention-days: 14
+          Get-ChildItem release -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content release/SHA256SUMS.txt
+      - name: Upload desktop package to draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $releaseFiles = @(Get-ChildItem release -File | Select-Object -ExpandProperty FullName)
+          gh release upload secureweb-desktop-v0.1.0 @releaseFiles --clobber

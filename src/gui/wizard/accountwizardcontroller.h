@@ -330,6 +330,7 @@ private:
     void handleSecureConnectionFailure(QNetworkReply *reply, bool retryHttpOnly);
 
     AccountPtr _account;
+    std::function<bool()> _secureWebEnabled;
     LocalNetworkPermissionCheck _localNetworkPermissionCheck;
     LocalSyncFolderPicker _localSyncFolderPicker;
     QPointer<QWindow> _window;
