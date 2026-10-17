@@ -164,7 +164,8 @@ jobs:
         shell: pwsh
         run: |
           $buildFolder = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build"
-          ctest --test-dir "$buildFolder" -R "SecureWebReply|AccountWizardController" --output-on-failure --timeout 120
+          if (!(Test-Path "$buildFolder/bin/SecureWebReplyTest.exe") -or !(Test-Path "$buildFolder/bin/AccountWizardControllerTest.exe")) { throw 'SecureWeb test targets are missing' }
+          ctest --test-dir "$buildFolder" -R "SecureWebReply|AccountWizardController" --no-tests=error --output-on-failure --timeout 120
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package desktop application
         shell: pwsh
