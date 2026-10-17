@@ -170,6 +170,15 @@ jobs:
       - name: Package desktop application
         shell: pwsh
         run: |
+          # The stable-35.0 upstream blueprint uses os.path without importing os.
+          # Repair only this missing import in the runner's downloaded blueprint.
+          $blueprint = "${{ env.CRAFT_TARGET }}/etc/blueprints/locations/craft-blueprints-nextcloud/nextcloud-client/nextcloud-client.py"
+          $source = Get-Content $blueprint -Raw
+          if ($source -notmatch '(?m)^import os\s*$') {
+              if ($source -notmatch '(?m)^import info\s*$') { throw 'Unexpected Nextcloud blueprint; review packaging compatibility' }
+              $source = $source -replace '(?m)^import info', "import os`nimport info"
+              Set-Content $blueprint $source -NoNewline
+          }
           python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c --package nextcloud-client
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force release | Out-Null
